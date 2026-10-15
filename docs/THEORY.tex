@@ -1,0 +1,1094 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,
+  citecolor=blue!55!black,pdftitle={SIMBA: Mathematical Foundations and Implementation Contract},
+  pdfauthor={Ajit Kumar}}
+\setlist{itemsep=3pt,topsep=5pt}
+\setlength{\emergencystretch}{2em}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\supp}{\operatorname{supp}}
+\newcommand{\ind}{\mathbf{1}}
+\newcommand{\inc}{\Delta_{\mathrm{inc}}}
+\newcommand{\calI}{\mathcal{I}}
+\newcommand{\calB}{\mathcal{B}_{\mathrm{tr}}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\title{SIMBA: Mathematical Foundations\\and Implementation Contract}
+\author{Ajit Kumar}
+\date{15 October 2026}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+SIMBA is a bundle-completion procedure combining a pairwise collaborative
+backbone, historical joint-incidence surplus, redundancy-weighted quadratic
+seed concordance, and exposure-modulated Gaussian shrinkage. This document
+specifies the operators implemented in the standalone repository and derives
+their mathematical properties. It proves a separation between pairwise
+projection and triple incidence, characterizes concordance through elementary
+symmetric polynomials and Rao diversity, derives the normal--normal posterior,
+and states the exact conditions under which inverse-frequency variance
+components are identifiable. It also distinguishes algebraic identities,
+model-conditional statistical results, implementation policies, and empirical
+retrieval claims. The constituent results on hypergraphs, diversity, and
+Gaussian conjugacy are established mathematics; their use here does not
+constitute a claim to have invented those primitives.
+\end{abstract}
+\tableofcontents
+\newpage
+
+\section{Purpose, scope, and types of claims}
+This is the detailed theoretical companion to \code{simba/operators.py}.
+The shorter paper methodology is in \code{paper/method.tex}. The discussion
+applies to the current operators, rather than to every historical SIMBA
+experiment. Dataset-specific evaluators add feature channels and select
+coefficients; they do not all instantiate an identical scoring formula.
+
+Four kinds of statements must be kept separate:
+\begin{enumerate}
+  \item \textbf{Algebraic facts:} identities and operator properties that
+  hold for the specified inputs, independent of a data-generating model.
+  \item \textbf{Model-conditional results:} posterior or moment-estimation
+  statements that require explicit distributional or conditional-moment
+  assumptions.
+  \item \textbf{Software policies:} choices such as positive variance floors,
+  clipping, validation grids, and disabling unidentified shrinkage.
+  \item \textbf{Empirical claims:} improvements in Recall@20 or NDCG@20,
+  which require an evaluation protocol and measured evidence.
+\end{enumerate}
+For example, joint incidence can contain information absent from a pairwise
+projection. This does not prove that a particular incidence bonus improves
+ranking. Similarly, a posterior mean minimizes squared-error Bayes risk under
+its assumed model, but that result is not a Recall@20 guarantee.
+
+\section{Task, notation, and information boundary}
+\subsection{Bundle completion}
+Let $\calI=\{1,\ldots,n\}$ be a fixed item catalogue and
+$\calB=\{b_1,\ldots,b_m\}$ the training bundles. Each bundle is a set;
+repeated item identifiers within a bundle are removed by the graph
+constructor. A query consists of an observed seed set $S\subset\calI$.
+The candidate domain is $\calI\setminus S$. At evaluation time, a disjoint
+held-out set $H$ supplies the relevant completion items.
+
+Define the binary incidence matrix and degrees by
+\begin{equation}
+ B_{bi}=\ind\{i\in b\},\qquad
+ f_i=\sum_b B_{bi},\qquad d_b=\sum_i B_{bi}.
+ \label{eq:incidence}
+\end{equation}
+The seed indicator is $q_S\in\{0,1\}^n$; a batch of $Q$ queries forms
+$J=[q_{S_1},\ldots,q_{S_Q}]\in\{0,1\}^{n\times Q}$.
+Unless explicitly stated otherwise, all graph results below use binary $B$.
+The optional weighted constructor is treated separately in
+Section~\ref{sec:weighted}.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$a_i=(f_i+5)^{-\alpha}$ & Seed exposure attenuation \\
+$v_b=(d_b+1)^{-\nu}$ & Bundle-volume attenuation \\
+$r_b=(d_b+1)^{-1}$ & Smoothing bundle normalization \\
+$\beta\geq0$ & Joint-incidence coefficient \\
+$\tau>0$ & Concordance denominator regularizer \\
+$w_{cs}\geq0$ & Candidate support from seed $s$ \\
+$G_S$, $K_S$ & Seed similarity and concordance weighting matrices \\
+$Y_{cS}$, $\mu_{cS}$ & Fused observation score and scaled prior mean \\
+$\sigma_0^2$, $\sigma_\epsilon^2$ & Prior and exposure-noise variance components \\
+$\kappa=\sigma_\epsilon^2/\sigma_0^2$ & Exposure shrinkage scale \\
+\bottomrule
+\end{tabular}
+\end{center}
+The graph defaults are $\alpha=\nu=1/2$ and $\beta=1.5$.
+The code calls $\nu$ \code{gamma\_vol}; it is unrelated to the concordance
+kernel parameter $\gamma$ used later.
+
+\subsection{What each split may supply}
+Training bundles determine collaborative incidence and exposure. Catalogue
+metadata and frozen content features describe items, including items unseen
+in training bundles. Validation queries determine score scaling, variance
+components, and any selected fusion or shrinkage parameters. Test targets
+determine evaluation metrics only. Catalogue-level text preprocessing may
+use all item descriptions; that is a transductive catalogue assumption,
+not evidence that the corresponding held-out bundle memberships are known.
+
+The benchmark loaders also have dataset-specific auxiliary interactions,
+filters, and query caps. Those choices are documented in
+\code{docs/REPRODUCIBILITY.md}. A mathematical property of the shared operator
+does not certify a loader's experimental protocol.
+
+\section{Pairwise induction and propagation}
+\subsection{Additive pairwise support}
+Set $D_a=\diag(a)$ and $D_v=\diag(v)$. Before diagonal removal, the
+pairwise score matrix is
+\begin{equation}
+ W^{\mathrm{full}}=B^\top D_v B D_a,
+ \qquad W=W^{\mathrm{full}}-\diag(\diag(W^{\mathrm{full}})).
+ \label{eq:pairgraph}
+\end{equation}
+Thus $W_{cs}=a_s\sum_{b:\,c,s\in b}v_b$ for $c\neq s$. The attenuation
+is on the seed side, so $W$ need not be symmetric. The additive candidate
+score is
+\begin{equation}
+ A^{\mathrm{pair}}_c(S)=\sum_{s\in S}W_{cs}.
+ \label{eq:pairscore}
+\end{equation}
+\code{score\_pairwise\_and\_diff2} computes $W^{\mathrm{full}}J$ in
+factored form. For $c\notin S$, this is exactly~\eqref{eq:pairscore}.
+Seed rows can retain self-contributions in the intermediate array; the
+evaluators exclude seed items from the final candidate ranking. Those
+intermediate values can still enter propagated channels.
+
+\subsection{Symmetric smoothing is not a Markov transition}
+The binary-incidence implementation of \code{propagate} applies
+\begin{equation}
+ P_{\mathrm{sym}}=D_a B^\top D_r B D_a-D_h,
+ \quad h_i=a_i^2\sum_b r_b B_{bi},\quad D_r=\diag(r).
+ \label{eq:psym}
+\end{equation}
+Its diagonal is zero; for $i\neq j$,
+$(P_{\mathrm{sym}})_{ij}=a_i a_j\sum_b r_b B_{bi}B_{bj}\geq0$.
+The matrix is symmetric, but its rows are not generally normalized.
+Removing the diagonal also need not preserve positive semidefiniteness.
+Consequently, symmetry alone gives neither a probability transition nor
+a contraction in a chosen norm. ``Diffusion'' here denotes graph smoothing.
+The function returns $P_{\mathrm{sym}}X$; naming a channel ``diff2'' does
+not mean that this function itself computes $P_{\mathrm{sym}}^2X$.
+
+\subsection{The separately exposed random-walk operator}
+For $f_i>0$ and $d_b>0$, let
+\begin{equation}
+ T_0=D_{1/f} B^\top D_{1/d} B,\qquad
+ \bar T=T_0-\diag(\diag(T_0)),\qquad
+ \rho_i=\sum_j\bar T_{ij}.
+\end{equation}
+Zero-degree reciprocals are defined to be zero. Define
+\begin{equation}
+ (P_{\mathrm{rw}})_{ij}=\begin{cases}
+   \bar T_{ij}/\rho_i,&\rho_i>0,\\
+   0,&\rho_i=0.
+ \end{cases}
+ \label{eq:prw}
+\end{equation}
+\begin{proposition}[Active-row stochasticity]
+$P_{\mathrm{rw}}$ has nonnegative entries and zero diagonal. Every row with
+$\rho_i>0$ sums to one; every other row is zero. On active rows,
+$(P_{\mathrm{rw}}x)_i$ is a convex combination of neighbouring values.
+\end{proposition}
+\begin{proof}
+All factors of $T_0$ are nonnegative. Diagonal deletion preserves off-diagonal
+nonnegativity. Dividing a positive row sum by itself gives one, and a
+zero row sum in a nonnegative matrix implies an all-zero row. The convex
+combination statement follows directly from these weights.
+\end{proof}
+A warm item occurring only in singleton bundles can also have a zero row.
+Warm exposure alone is therefore insufficient for the active-row condition.
+The evaluators do not all use $P_{\mathrm{rw}}$; some use~\eqref{eq:psym}
+or a graph mixture specific to their dataset. These operators are related
+to established hypergraph constructions~\cite{zhou2006}, but the precise
+normalizations above specify the implementation contract.
+
+\section{Historical joint-incidence surplus}
+\subsection{Definition and exact matrix form}
+For a query $S$, define
+\begin{equation}
+ o_b(S)=\sum_{s\in S}B_{bs}=|b\cap S|,\qquad
+ u_b(S)=\sum_{s\in S}a_s B_{bs}.
+\end{equation}
+The pure surplus is
+\begin{equation}
+ \inc(c\mid S)=\beta\sum_b B_{bc}v_b u_b(S)
+                      \max\{0,o_b(S)-1\}.
+ \label{eq:delta}
+\end{equation}
+For a batch, with $\odot$ denoting elementwise multiplication,
+\begin{equation}
+ D_{\mathrm{inc}}=\beta B^\top
+ \left[(D_v B D_aJ)\odot(BJ-\mathbf 1)_+\right].
+ \label{eq:delta-matrix}
+\end{equation}
+\code{score\_simplicial\_incidence\_only} returns this array and its
+propagated version. It does not add~\eqref{eq:pairscore}.
+
+\begin{proposition}[Nonnegativity and exact activation]
+Assume $a_s>0$, $v_b>0$, and $\beta>0$. For $c\notin S$,
+$\inc(c\mid S)>0$ if and only if a training bundle contains $c$ and at
+least two distinct seeds. In particular, $|S|\leq1$ implies $\inc=0$.
+With $\beta=0$, the surplus is identically zero.
+\end{proposition}
+\begin{proof}
+Each summand in~\eqref{eq:delta} is nonnegative. It is strictly positive
+exactly when $B_{bc}=1$ and $o_b\geq2$, since these conditions also imply
+$u_b>0$. A finite nonnegative sum is positive exactly when one summand is.
+\end{proof}
+
+\subsection{What order of interaction is actually represented?}
+\begin{proposition}[Triple-incidence representation]
+Let $T_{cst}=\sum_b v_b B_{bc}B_{bs}B_{bt}$ for distinct $c,s,t$.
+For candidates outside $S$,
+\begin{equation}
+ \inc(c\mid S)=\beta\sum_{\{s,t\}\subset S}(a_s+a_t)T_{cst}.
+ \label{eq:triple}
+\end{equation}
+Thus the direct surplus is a query-quadratic aggregation of weighted
+three-item incidences, even when training hyperedges contain more than
+three items.
+\end{proposition}
+\begin{proof}
+For a particular bundle, write $x_s=B_{bs}\in\{0,1\}$.
+Since $x_s^2=x_s$,
+\begin{align}
+ u_b(o_b-1)
+ &=\sum_s a_s x_s\left(\sum_t x_t-1\right)\\
+ &=\sum_{s\neq t}a_s x_sx_t
+ =\sum_{\{s,t\}\subset S}(a_s+a_t)x_sx_t.
+\end{align}
+If $o_b=0$, both $u_b$ and the expression are zero; if $o_b\geq1$, the
+clamp in~\eqref{eq:delta} does not change the product. Substituting this
+identity into~\eqref{eq:delta} gives~\eqref{eq:triple}.
+\end{proof}
+This distinction matters. The operator accesses genuinely joint information
+absent from a pairwise graph, but it is not an unrestricted estimator of
+all $k$-way interactions for every $k$. Two hypergraphs with matching $T$
+and matching normalization statistics produce the same direct surplus.
+There is no boundary operator, orientation, Hodge Laplacian, or homology
+calculation in this function. ``Simplicial'' names its joint-incidence
+construction; it does not establish a topological learning guarantee.
+
+\subsection{Separation from identical pairwise projections}
+Consider the following unweighted hypergraphs on items $0,\ldots,5$:
+\begin{align}
+ \mathcal H_1&=\{012,034,135,245\},\\
+ \mathcal H_2&=\{013,024,125,345\}.
+ \label{eq:pasch}
+\end{align}
+Here $012$ denotes the set $\{0,1,2\}$. Each item has degree two, all
+bundles have size three, and the off-diagonal pairs in both systems are
+\begin{equation*}
+ \{01,02,12,03,04,34,13,15,35,24,25,45\}.
+\end{equation*}
+Consequently, the full $B^\top B$, including its diagonal, agrees between
+the systems. So do $W$, $P_{\mathrm{sym}}$, and $P_{\mathrm{rw}}$.
+
+\begin{theorem}[Pairwise information is insufficient]
+No function of the common pairwise projection and its shared degree/size
+statistics can reproduce~\eqref{eq:delta} for every hypergraph.
+\end{theorem}
+\begin{proof}
+For $S=\{0,1\}$ and $c=2$, $\mathcal H_1$ has the contributing bundle
+$012$, giving $\inc=\beta v_{012}(a_0+a_1)>0$. In $\mathcal H_2$, no
+bundle contains $0,1,2$, so $\inc=0$. A deterministic function of the
+identical pairwise inputs must give the same output in both cases and
+therefore cannot equal both surplus values.
+\end{proof}
+This is an expressivity separation, not an identification theorem for a
+whole hypergraph, and not a statistical advantage on every dataset.
+The matched sizes avoid confounding the comparison with volume weights.
+
+\subsection{Activation rate, propagation, and retrieval}
+Define the query event
+\begin{equation}
+ E(S)=\{\exists b\in\calB: |b\cap S|\geq2\}.
+\end{equation}
+For a random query, let $A(S)$ mean that at least one candidate outside $S$
+has a nonzero direct surplus. Then
+\begin{equation}
+ \Pr(A(S))\leq\Pr(E(S)).
+ \label{eq:activation}
+\end{equation}
+The inequality can be strict: an overlapping bundle may contain seeds only.
+If $E(S)$ is false, the entire surplus vector is zero and linear propagation
+also returns zero. If it is true, propagation can deliver signal to candidates
+that do not themselves share the original hyperedge.
+
+\begin{corollary}[An opportunity bound on a bounded metric]
+Suppose two scoring pipelines differ only by this surplus and its deterministic
+propagation, with identical remaining parameters and tie handling. For a
+per-query metric $M\in[0,1]$,
+\begin{equation}
+ \left|\E[M_{\mathrm{aug}}-M_{\mathrm{base}}]\right|
+ \leq\Pr(E(S)).
+\end{equation}
+\end{corollary}
+\begin{proof}
+Outside $E(S)$ the two scores and rankings agree, so the difference is zero.
+Inside the event the metric difference has absolute value at most one.
+Apply the triangle inequality and take expectations.
+\end{proof}
+This loose bound applies only to a controlled comparison with everything
+else fixed. Retuning global coefficients after adding the channel can
+change inactive-query scores and invalidates that argument. The bound
+does not determine the sign of improvement on active queries.
+
+\section{Quadratic concordance from candidate--seed supports}
+\subsection{Nonnegative support construction}
+For each candidate and seed, the Rao operator uses
+\begin{equation}
+ w_{cs}=W_{cs}+\eta\max\{0,x_c^\top x_s\},\qquad \eta\geq0,
+ \label{eq:support}
+\end{equation}
+when dense features are supplied. Otherwise the second term is absent.
+Theoretical cosine bounds below assume unit-norm feature rows; zero rows
+may be retained. The function does not normalize arbitrary inputs itself.
+Write $A_c=\sum_{s\in S}w_{cs}$. If $A_c>0$, set $p_{cs}=w_{cs}/A_c$;
+when $A_c=0$, define all concordance scores to be zero.
+
+\subsection{Elementary symmetric polynomial identity}
+Let $e_2(w_c)=\sum_{s<t}w_{cs}w_{ct}$. The unweighted operator is
+\begin{equation}
+ R_0(c\mid S;\tau)=\frac{2e_2(w_c)}{A_c+\tau}
+ =\frac{A_c^2-\sum_s w_{cs}^2}{A_c+\tau}.
+ \label{eq:r0}
+\end{equation}
+The standalone \code{score\_concordance\_e2} function uses $w_{cs}=W_{cs}$
+without the dense addition. Equation~\eqref{eq:r0} also describes the
+unweighted kernel case of the general Rao formula for any supplied
+nonnegative supports, including~\eqref{eq:support}.
+\begin{proposition}[Mass--diversity factorization]
+For $A_c>0$,
+\begin{equation}
+ R_0=\frac{A_c^2}{A_c+\tau}
+       \left(1-\sum_s p_{cs}^2\right).
+ \label{eq:gini}
+\end{equation}
+If exactly $k_+>0$ seeds have positive support, then
+\begin{equation}
+ 0\leq R_0\leq\frac{A_c^2}{A_c+\tau}\left(1-\frac1{k_+}\right),
+ \label{eq:r0bound}
+\end{equation}
+with equality at the upper bound for equal support on those $k_+$ seeds.
+\end{proposition}
+\begin{proof}
+Expanding $(\sum_s w_{cs})^2$ yields the sum of squares plus $2e_2$.
+Substitution of $w_{cs}=A_cp_{cs}$ proves~\eqref{eq:gini}.
+Cauchy--Schwarz gives $1=(\sum p_{cs})^2\leq k_+\sum p_{cs}^2$.
+The lower bound follows from nonnegative cross-products, and equal shares
+attain the upper bound.
+\end{proof}
+At fixed total mass, concordance rewards dispersed support. Without fixing
+mass, it trades diversity against magnitude. The code clamps a small
+negative value of $A_c^2-\sum_s w_{cs}^2$ to zero to guard cancellation.
+
+\subsection{Relation to products and its exact limit}
+For $m_S=|S|$,
+\begin{equation}
+ \prod_{s\in S}(\tau+w_{cs})
+ =\sum_{j=0}^{m_S}\tau^{m_S-j}e_j(w_c),\qquad e_0=1.
+ \label{eq:product}
+\end{equation}
+This identity explains how $e_2$ occurs as one term in a product expansion.
+It does not make $R_0$ equal to a product-of-experts likelihood: other
+terms are omitted and the denominator is different. Strict conjunction
+would depend on all seeds, for example through $e_{m_S}=\prod_s w_{cs}$.
+For equal total mass three,
+\begin{align*}
+ w^{(1)}&=(1.5,1.5,0),& e_2(w^{(1)})&=2.25,&e_3(w^{(1)})&=0,\\
+ w^{(2)}&=(2.1,0.45,0.45),& e_2(w^{(2)})&=2.0925,&e_3(w^{(2)})&=0.42525.
+\end{align*}
+Concordance prefers the first, while the strict product prefers the second.
+The use of second-order terms resembles established bilinear models such
+as factorization machines~\cite{rendle2010}; the support normalization
+and seed kernel specify the particular score used here.
+
+\section{Redundancy weighting through Rao diversity}
+\subsection{Similarity and weighting matrices}
+With category labels $\ell_s$ and normalized features, the default combined
+seed similarity is
+\begin{equation}
+ G_{st}=\tfrac12\ind\{\ell_s=\ell_t\}
+          +\tfrac12\max\{0,x_s^\top x_t\},\quad s\neq t,
+ \qquad G_{ss}=1.
+ \label{eq:similarity}
+\end{equation}
+With only one source, that source determines $G$. With neither, the code
+uses $G=I$. For $s\neq t$, its general kernel is
+\begin{equation}
+ K^{(\gamma)}_{st}=\begin{cases}
+   \max\{0,1+\gamma G_{st}\},&\gamma<0,\\
+   1+\gamma G_{st},&\gamma\geq0,
+ \end{cases}
+ \qquad K^{(\gamma)}_{ss}=0.
+ \label{eq:kernel}
+\end{equation}
+Complementarity mode has $\gamma=-1$, giving $K_{st}=1-G_{st}$.
+The music evaluator instead uses $\gamma=1$, which favors agreement
+between similar seeds. That is a coherence weighting, not the same
+redundancy penalty. In either case, missing or inaccurate metadata changes
+what ``different'' or ``similar'' means.
+
+\subsection{Quadratic diversity and implementation}
+The score is
+\begin{equation}
+ R_K(c\mid S;\tau)=\frac{w_c^\top K_Sw_c}{A_c+\tau}
+  =\frac{A_c^2}{A_c+\tau}\,p_c^\top K_Sp_c.
+ \label{eq:rao}
+\end{equation}
+For a dissimilarity matrix $K$, $p^\top Kp$ is Rao's quadratic
+diversity~\cite{rao1982}. It is also the expected dissimilarity between
+two independent draws of a seed index from $p$. The independence here is
+a mathematical device for interpreting the double sum; it does not assert
+independence of the observed seed evidence. The sum counts both orders of
+each unordered seed pair, consistently with $2e_2$ in~\eqref{eq:r0}.
+
+\begin{proposition}[Bounds and vanishing conditions]
+If $K$ is symmetric, zero-diagonal, and $0\leq K_{st}\leq K_{\max}$,
+then
+\begin{equation}
+ 0\leq R_K\leq K_{\max}\frac{A_c^2}{A_c+\tau}
+                  \left(1-\sum_s p_{cs}^2\right)
+ \leq K_{\max} A_c.
+ \label{eq:raobound}
+\end{equation}
+The score is zero if every pair with positive support has $K_{st}=0$.
+It is positive exactly when at least one pair has positive support on
+both seeds and a strictly positive kernel entry.
+\end{proposition}
+\begin{proof}
+Expand $w^\top Kw=\sum_{s\neq t}K_{st}w_sw_t$. All terms are
+nonnegative. Bounding each kernel entry by $K_{\max}$ and applying
+\eqref{eq:gini} gives~\eqref{eq:raobound}. The positivity condition follows
+from the same finite nonnegative sum.
+\end{proof}
+Complementarity mode has $K_{\max}=1$. For normalized features and
+$\gamma=1$, $K_{\max}=2$. These bounds concern raw scores, before
+catalogue z-normalization. Neither positive semidefiniteness nor a metric
+triangle inequality is needed for these bounds.
+
+\subsection{Redundant and diverse seeds}
+If all seeds have $G_{st}=1$, complementarity-mode concordance is zero.
+If all off-diagonal similarities are zero, $R_K=R_0$. This formalizes
+the difference between redundant and distinct support sources, conditional
+on the metadata proxy. Different categories are not by themselves proof
+of functional compatibility; dissimilar items can also be incompatible.
+
+The operator is invariant to permutation of the same seed set when the
+corresponding rows and columns of $K$ are permuted together. It is not
+generally invariant to adding a distinct item identifier with identical
+metadata to an existing seed. Such an addition changes $A_c$, the support
+distribution, and its cross-terms with other seed groups. Exact
+duplication-invariance would require a separately specified group-level
+aggregation; it is not a property claimed here.
+
+Nor is $R_K$ coordinatewise monotone for every admissible $K$. For example,
+take three seeds with $K_{12}=K_{21}=1$ and all other entries zero.
+At $w=(1,1,t)$,
+\begin{equation}
+ R_K(w;\tau)=\frac{2}{2+t+\tau},
+\end{equation}
+which decreases with $t$. A new support source that contributes no
+dissimilarity-weighted agreement can dilute the normalized score.
+
+\subsection{Scaling law and exact finite-scale correction}
+For a fixed seed kernel and any $\lambda>0$,
+\begin{equation}
+ R_K(\lambda w;\lambda\tau)=\lambda R_K(w;\tau).
+ \label{eq:homogeneous}
+\end{equation}
+This follows because the numerator scales quadratically and the denominator
+linearly. For fixed $\tau$, writing $Q_K=w^\top Kw$ instead yields
+\begin{equation}
+ R_K(\lambda w;\tau)=\frac{\lambda^2 Q_K}{\lambda A+\tau}.
+ \label{eq:fixedtau}
+\end{equation}
+For $Q_K>0$, the ratio to $\lambda R_K(w;\tau)$ is
+\begin{equation}
+ \frac{R_K(\lambda w;\tau)}{\lambda R_K(w;\tau)}
+ =\frac{\lambda(A+\tau)}{\lambda A+\tau}.
+\end{equation}
+Thus exact degree-one homogeneity requires joint scaling. The large-support
+approximation replaces $A+\tau$ by $A$; its relative shortfall from
+$Q_K/A$ is exactly $\tau/(A+\tau)$. Merely letting $\lambda$ grow with
+fixed original $A$ does not prove equality to $\lambda R_K(w;\tau)$.
+If support is rescaled by changing underlying model parameters, the dense
+and graph terms in~\eqref{eq:support} must both scale to invoke
+\eqref{eq:homogeneous}.
+
+\subsection{Information separation from incidence}
+Rao concordance is a function of candidate--seed supports and seed
+similarities. If those inputs agree, its output agrees. In particular,
+the two hypergraphs in~\eqref{eq:pasch}, with matched metadata, yield
+identical concordance but different incidence surplus. Conversely,
+concordance can be positive when its supports come from distinct pairwise
+bundles and no single bundle contains two seeds. The channels therefore
+access different information. This does not imply statistical independence,
+uncorrelated outputs, or orthogonality of fitted estimators.
+
+\section{Fusion, metadata priors, and interpretation of the target}
+\subsection{Catalogue normalization and fused observations}
+For a channel $g_k(c,S)$, define column-wise catalogue normalization
+\begin{equation}
+ z_k(c,S)=\frac{g_k(c,S)-\bar g_k(S)}{s_k(S)+\varepsilon_z},
+ \qquad \bar g_k(S)=\frac1n\sum_i g_k(i,S).
+ \label{eq:zscore}
+\end{equation}
+The repository uses $\varepsilon_z=10^{-9}$. NumPy uses its default
+population standard deviation, while the Torch implementation uses its
+default sample correction. This small convention difference is part of
+the implementation, not a new statistical estimator.
+Typically,
+\begin{equation}
+ Y_{cS}=\sum_k\omega_k z_k(c,S),\qquad
+ P_{cS}=\sum_{k\in\mathcal P}\xi_k z_k(c,S),\qquad
+ \mu_{cS}=s_{\mathrm{val}}P_{cS}.
+ \label{eq:fusion}
+\end{equation}
+The selected $\mathcal P$ need not contain only exogenous metadata:
+the controlled retail prior includes bridge, text, auxiliary interaction,
+and Rao terms. $Y$ and $P$ can therefore share channels and training data.
+The term ``prior'' describes its role in shrinkage, not a guarantee that
+it is independent evidence. The moment model below must be assessed for
+the actual fused scores, including this dependence.
+
+\subsection{The latent target is a model, not an observed label}
+Let $\theta_{cS}\in\R$ denote latent compatibility on the standardized
+score scale. It is not defined here as a probability, a calibrated
+log-odds, or a statistically identified log-lift. The score $Y$ is a
+constructed collaborative/content estimator, not a direct repeated
+measurement of an observed $\theta$. The Gaussian hierarchy supplies a
+working model connecting the two. Algebraically exact posterior updating
+under that model is a narrower statement than correct real-world
+calibration of $\theta$.
+
+\section{Exposure-modulated Gaussian posterior}
+\subsection{Assumptions}
+For fixed $S,c$, positive exposure $f_c$, and a fitted prior mean $\mu_{cS}$,
+assume
+\begin{align}
+ \theta_{cS}\mid\mu_{cS},f_c
+   &\sim\mathcal N(\mu_{cS},\sigma_0^2),\\
+ Y_{cS}\mid\theta_{cS},\mu_{cS},f_c
+   &\sim\mathcal N(\theta_{cS},\sigma_\epsilon^2/f_c),
+ \label{eq:hierarchy}
+\end{align}
+with strictly positive variances. The second line specifies a zero-mean
+likelihood error conditional on the latent compatibility and prior mean.
+It does not follow merely from positive co-occurrence counts. Frequency
+is treated as an exposure proxy, although real histories can have unequal
+opportunity, temporal drift, and dependent observations.
+
+\subsection{Derivation by completing the square}
+Suppress the indices and put $v_f=\sigma_\epsilon^2/f$. The posterior
+log-density, up to constants independent of $\theta$, is
+\begin{align}
+ \log p(\theta\mid Y,\mu,f)
+ &=-\frac12\left[\frac{(\theta-\mu)^2}{\sigma_0^2}
+                 +\frac{(Y-\theta)^2}{v_f}\right]+C\\
+ &=-\frac12\left[(\sigma_0^{-2}+v_f^{-1})\theta^2
+       -2(\mu\sigma_0^{-2}+Yv_f^{-1})\theta\right]+C'.
+\end{align}
+Therefore the posterior is Gaussian with
+\begin{align}
+ V_f&=\left(\frac1{\sigma_0^2}+\frac f{\sigma_\epsilon^2}\right)^{-1},
+ \label{eq:postvar}\\
+ \widehat\theta
+ &=V_f\left(\frac\mu{\sigma_0^2}+\frac{fY}{\sigma_\epsilon^2}\right)
+ =\frac{fY+\kappa\mu}{f+\kappa}
+ =(1-u_f)Y+u_f\mu,\quad
+ u_f=\frac\kappa{f+\kappa},\quad
+ \kappa=\frac{\sigma_\epsilon^2}{\sigma_0^2}.
+ \label{eq:posterior}
+\end{align}
+This is the literal update in \code{conjugate\_posterior} and
+\code{apply\_eb\_shrinkage}; no positive-part residual is added.
+
+\begin{proposition}[Convexity, exposure limits, and sensitivity]
+For $f\geq0$ and $\kappa>0$, $0<u_f\leq1$ and the posterior mean lies
+between $Y$ and $\mu$. Moreover,
+\begin{equation}
+ \frac{\partial u_f}{\partial f}=-\frac\kappa{(f+\kappa)^2},\qquad
+ \frac{\partial\widehat\theta}{\partial Y}=\frac f{f+\kappa},\qquad
+ \frac{\partial\widehat\theta}{\partial\mu}=\frac\kappa{f+\kappa}.
+\end{equation}
+At $f=0$ the zero-likelihood-precision limit is $\widehat\theta=\mu$;
+as $f\to\infty$, $\widehat\theta\to Y$ for fixed $Y,\mu,\kappa$.
+\end{proposition}
+The $f=0$ case is a limit and a software convention; the positive-exposure
+Gaussian likelihood in~\eqref{eq:hierarchy} is not a proper finite-variance
+observation distribution at $f=0$. In contrast, \code{kappa\_f=0}
+explicitly disables shrinkage and returns $Y$ even on cold items. It
+should not be interpreted by substituting $f=\kappa=0$ in the fraction.
+
+For $f=(0,0,9)$, $Y=(-2,-2,4)$, $\mu=(-1,1,1)$ and $\kappa=4$,
+\begin{equation}
+ \widehat\theta=(-1,1,40/13)\approx(-1,1,3.076923).
+\end{equation}
+Coldness alone does not impose a positive score: a negative cold prior
+remains negative. Whether that score enters a top-$K$ list still depends
+on every competing candidate.
+
+\subsection{A conditional squared-error guarantee, with its limits}
+\begin{theorem}[Bayes risk under the specified hierarchy]
+For known variances and a correctly specified hierarchy, the posterior
+mean minimizes conditional expected squared error among all measurable
+estimators based on $Y,\mu,f$. Its integrated risk for fixed $f>0,\mu$ is
+\begin{equation}
+ \E[(\widehat\theta-\theta)^2\mid f,\mu]
+ =\frac{\sigma_0^2\sigma_\epsilon^2}{f\sigma_0^2+\sigma_\epsilon^2}
+ \leq\min\{\sigma_0^2,\sigma_\epsilon^2/f\}.
+ \label{eq:risk}
+\end{equation}
+\end{theorem}
+\begin{proof}
+For any $a=a(Y,\mu,f)$, the conditional squared-error decomposition is
+\begin{equation}
+ \E[(\theta-a)^2\mid Y,\mu,f]
+ =\Var(\theta\mid Y,\mu,f)
+   +(a-\E[\theta\mid Y,\mu,f])^2.
+\end{equation}
+The second term is minimized at the posterior mean. The posterior variance
+is the constant $V_f$ in~\eqref{eq:postvar}, so integrating over $Y$
+gives~\eqref{eq:risk}. Its denominator is at least either individual
+precision contribution, giving both inequalities.
+\end{proof}
+This is an established property of posterior means, not a new SIMBA
+optimality theorem. Estimated or validation-selected hyperparameters,
+biased $Y$, prior misspecification, and correlated prior/observation errors
+can invalidate the comparison. Lower latent squared error also does not
+imply better retrieval of held-out binary memberships. The implementation
+returns a plug-in mean; it does not return uncertainty intervals accounting
+for fitted hyperparameters or a verified coverage guarantee.
+
+\section{Variance-component estimation and identifiability}
+\subsection{From the hierarchy to a conditional moment}
+Write $\theta-\mu=\zeta$ and $Y-\theta=\epsilon$, so $Y-\mu=\zeta+\epsilon$.
+Under~\eqref{eq:hierarchy},
+\begin{equation}
+ \E[(Y-\mu)^2\mid f,\mu]
+ =\sigma_0^2+\sigma_\epsilon^2/f.
+ \label{eq:moment}
+\end{equation}
+The cross-term vanishes because
+$\E[\epsilon\mid\zeta,f,\mu]=0$.
+Gaussianity is sufficient for the posterior derivation, but not necessary
+for this moment: zero means, the stated variances, and a zero cross-moment
+are enough. Conversely, the moment alone does not imply a Gaussian
+posterior.
+
+With $Q_v$ validation queries, the implemented item-level response is
+\begin{equation}
+ v_c=\frac1{Q_v}\sum_{S\in\mathcal Q_v}(Y_{cS}-\mu_{cS})^2,
+ \qquad x_c=1/f_c,\quad c\in\mathcal W=\{c:f_c>0\}.
+ \label{eq:responses}
+\end{equation}
+The method regresses $v_c$ on $x_c$; it does not regress the variance of
+$Y$ alone, nor the spread of the prior means. Each warm item receives
+one OLS observation regardless of its exposure.
+
+\subsection{Raw OLS formulas and their proof conditions}
+Let $N_w=|\mathcal W|$, $D_x=\sum_{c\in\mathcal W}(x_c-\bar x)^2$.
+When $N_w\geq2$ and $D_x>0$, the raw estimates are
+\begin{align}
+ \widetilde\sigma_\epsilon^2
+   &=\frac{\sum_c(x_c-\bar x)(v_c-\bar v)}{D_x},\\
+ \widetilde\sigma_0^2&=\bar v-\widetilde\sigma_\epsilon^2\bar x.
+ \label{eq:ols}
+\end{align}
+They solve the unweighted least-squares normal equations for an intercept
+and slope. Calling these values variance components describes their
+intended target; finite-sample values may be negative.
+
+\begin{proposition}[Conditional unbiasedness of raw components]
+For a fixed identifiable design vector $x$, suppose
+$v_c=\sigma_0^2+\sigma_\epsilon^2x_c+e_c$ and
+$\E[e_c\mid x]=0$ for each warm item. Then the raw slope and intercept
+in~\eqref{eq:ols} are conditionally unbiased.
+\end{proposition}
+\begin{proof}
+Substitution into the slope gives
+\begin{equation}
+ \widetilde\sigma_\epsilon^2
+ =\sigma_\epsilon^2+\frac{\sum_c(x_c-\bar x)e_c}{D_x}.
+\end{equation}
+Conditional expectation of the second term is zero. The intercept error
+is $\bar e-\bar x(\widetilde\sigma_\epsilon^2-\sigma_\epsilon^2)$,
+which also has conditional expectation zero.
+\end{proof}
+Independence across items and homoskedastic errors are not needed for this
+expectation calculation. They do matter for usual OLS standard errors,
+efficiency, and concentration. Shared queries and graph structure can
+correlate residuals, so treating $N_wQ_v$ cells as independent observations
+would be unjustified. The routine does not estimate regression standard
+errors.
+
+There is an additional fitted-score caveat: $Y$ and $\mu$ are constructed
+and their scale or coefficients can be estimated on these same validation
+queries. The conditional-mean-zero premise is not automatically preserved
+after that fitting and selection. The raw formulas are OLS; unconditional
+finite-sample unbiasedness of the complete fitted SIMBA pipeline has not
+been established. A separate calibration split or cross-fitting could
+make such an analysis cleaner, but is not implemented by this document.
+
+\subsection{Identifiability and the numerical decision rule}
+\begin{proposition}[Moment identifiability]
+The intercept and slope are separately identifiable from the linear
+moment equation exactly when the design matrix with columns $1,x$ has
+rank two, equivalently when at least two distinct warm inverse frequencies
+are observed. With a single common $x_0$, only
+$\sigma_0^2+x_0\sigma_\epsilon^2$ is identified.
+\end{proposition}
+\begin{proof}
+The normal matrix has determinant
+\begin{equation}
+ \det\begin{pmatrix}N_w&\sum x_c\\\sum x_c&\sum x_c^2\end{pmatrix}
+ =N_wD_x.
+\end{equation}
+It is invertible exactly when $D_x>0$. For constant $x_0$, every pair of
+components with the same intercept-plus-$x_0$-times-slope has the same
+fitted conditional moment.
+\end{proof}
+The code uses the stronger numerical requirement $N_w\geq2$ and
+$D_x>10^{-12}$, testing a \emph{sum} of squared centered inverse
+frequencies, not a sample variance threshold. It otherwise returns
+\code{identifiable=False}, null raw and constrained components, and
+\code{kappa\_f=0.0}. All production evaluator grids then restrict their
+candidate shrinkage values to zero. Non-identification is not an estimate
+that the true noise component equals zero; disabling shrinkage is the
+chosen fallback policy.
+
+\subsection{Positive truncation and ratio clipping}
+For identifiable designs, the returned plug-in components are
+\begin{align}
+ \widehat\sigma_0^2&=\max\{\widetilde\sigma_0^2,10^{-4}\},&
+ \widehat\sigma_\epsilon^2&=\max\{\widetilde\sigma_\epsilon^2,10^{-4}\},\\
+ \widehat\kappa&=\operatorname{clip}
+   (\widehat\sigma_\epsilon^2/\widehat\sigma_0^2,0.05,50).
+ \label{eq:clip}
+\end{align}
+The raw outputs are unrounded; constrained outputs are reported separately.
+The nonlinear transformations in~\eqref{eq:clip} are generally biased,
+and even an unclipped ratio of unbiased components need not be unbiased.
+These componentwise floors are not the joint solution of a constrained
+nonnegative least-squares problem. ``Constrained plug-in'' refers to
+admissible returned values, not to an optimization problem that the code
+does not solve. Some evaluators subsequently choose a different positive
+$\kappa$ from a validation grid; that is a tuned posterior-shaped score,
+not necessarily the direct moment-ratio estimate.
+
+\subsection{Prior-shift invariance and misspecification}
+For any array $h_{cS}$, replacing $(Y,\mu)$ by $(Y+h,\mu+h)$ leaves
+$v_c$ and the variance estimates unchanged. This exact residual invariance
+explains why a simulated change in the spread of prior means need not
+change $\widehat\kappa$ when the same prior is added to $Y$. It does not
+prove that estimating a different prior on real data is harmless.
+
+For example, if the residual has conditional bias $b(f)$ and prior/noise
+cross-covariance $q(f)$, its second moment can instead contain
+\begin{equation}
+ \E[(Y-\mu)^2\mid f]
+ =\sigma_0^2+\sigma_\epsilon^2/f+b(f)^2+2q(f),
+\end{equation}
+under an otherwise comparable decomposition. Frequency-dependent prior
+error or correlated reused channels can then be mistaken for exposure
+noise. Diagnostics should examine residual-moment curves against $1/f$,
+negative raw components, clipping frequency, and sensitivity to the prior.
+
+\section{Validation-frozen inference and a batch-invariance result}
+\subsection{Calibration contract}
+A typical prior scale is
+\begin{equation}
+ s_{\mathrm{val}}=\frac{\operatorname{std}(Y_{\mathrm{val}})}
+ {\operatorname{std}(P_{\mathrm{val}})+10^{-9}},
+ \label{eq:scale}
+\end{equation}
+where the standard deviations pool the validation score array. Individual
+evaluators differ slightly in stabilizers and whether scale one is also
+considered. Every selected scale is frozen before test inference. The
+same applies to variance ratios, channel weights, encoder parameters,
+and any backward-elimination decisions. A moment fit uses validation
+scores without requiring held-out target labels; validation metric
+selection can use validation targets. Neither operation is performed
+on the test-query score batch in the current pipelines.
+
+\begin{theorem}[Score independence from unrelated query columns]
+Fix the catalogue, trained operators, metadata, and calibration parameters.
+Suppose each channel for query $S$ is computed only from $S$ and those
+fixed objects; any z-normalization is across catalogue items within its
+own query column. Then appending unrelated query columns to a batch
+does not change $\widehat\theta_{cS}$ in exact arithmetic.
+\end{theorem}
+\begin{proof}
+The raw channel column for $S$ is unchanged by hypothesis. Its mean and
+standard deviation in~\eqref{eq:zscore} use that column only, so the
+normalized column is unchanged. Fixed linear fusion gives unchanged
+$Y_{cS}$ and $P_{cS}$. Frozen scaling gives unchanged $\mu_{cS}$, and
+\eqref{eq:posterior} uses only these values and fixed $f_c,\kappa$.
+\end{proof}
+Re-estimating~\eqref{eq:scale} on each test batch would violate the frozen
+parameter premise. Floating-point kernels may introduce tiny layout-dependent
+differences, and evaluator tie perturbations can affect exact tied ranks;
+the proposition concerns the deterministic mathematical score. It does
+not assert invariance to changing the catalogue, because catalogue means,
+standard deviations, and available candidates can then change.
+
+\section{Auxiliary channels and boundaries of the theory}
+\subsection{Ontology and slot saturation}
+The ontology operator forms category co-occurrence statistics and
+positive-PMI-like off-diagonal weights, with optional soft clusters and
+within-type channels. \code{score\_slot\_saturation} adds a penalty based
+on query seeds sharing a candidate's category and empirical category
+duplication rates. Despite its name, this is an additive pairwise diagonal
+correction. It is not a distinct higher-order joint-incidence estimator.
+Its interpretation depends on the category system and on whether a
+bundle is expected to fill distinct slots or contain repeated types.
+
+\subsection{Spectral features and content bridges}
+The graph operator also constructs positive-PMI co-occurrence features
+and a truncated-SVD embedding. Content bridges mix frozen features with
+one or more graph propagation steps. Their scores supply additional
+channels and help score training-cold items with catalogue features.
+These operations do not make cold items collaboratively observed, and
+their feature quality is not guaranteed by the incidence or posterior
+proofs. A content-neighbour matrix can be row-normalized on populated
+rows without making every graph smoother in the system stochastic.
+
+\subsection{Set-attention encoder}
+The full evaluators additionally train a small neural set encoder on
+training examples, using transformed item features, attention pooling,
+and a contrastive objective with sampled negatives. Its output is fused
+as another channel. A set sum or attention aggregation is permutation
+invariant when attention weights are computed equivariantly and no
+order-dependent input is introduced. That structural observation is
+not a convergence or generalization theorem for the trained encoder.
+The offline demo and controlled retail ablation do not train this model;
+their execution does not verify the full encoder's optimization.
+
+\subsection{Pruning and retrieval policies}
+\code{prune\_weights\_val} performs validation-tolerance backward
+elimination of optional channels. It is not a minimum-description-length
+objective, and no global optimum over channel subsets is claimed.
+The optional tail/cold slot reservation is a post-hoc retrieval policy,
+separate from the normal--normal posterior. If enabled, the resulting
+ranking is not solely the ordering of~\eqref{eq:posterior}. Reports
+should state whether this policy was used.
+
+\section{Controlled ablations: what is and is not fixed}
+In the retail ablation, let $L$ denote the collaborative pairwise mixture,
+$P_g$ the fixed dataset-specific graph propagation, and $B_r,T,U$ the
+bridge, text, and auxiliary interaction scores. Writing $z$ for catalogue
+normalization, the implemented ladder is
+\begin{align}
+ F_0&=z(L)+0.8z(P_gL)+0.8z(B_r)+0.5z(T)+0.5z(U),\\
+ F_1&=z(L+\inc)+0.8z(P_g(L+\inc))
+                 +0.8z(B_r)+0.5z(T)+0.5z(U),\\
+ F_2&=F_0+0.35z(R_K),\\
+ F_3&=F_1+0.35z(R_K),\\
+ F_4&=(1-u)F_3+u\mu.
+ \label{eq:ablations}
+\end{align}
+The prior before frozen scaling is
+$P=0.8z(B_r)+0.5z(T)+0.5z(U)+0.35z(R_K)$.
+The graph, data split, raw backbone channels, and numerical coefficients
+are shared within a seed. Only validation scores fit the final prior
+scale and moment ratio.
+
+Because $z(L+\inc)\neq z(L)+z(\inc)$ in general, adding incidence also
+changes the normalization of the combined collaborative channel. The
+comparison measures the implemented incidence-plus-normalization
+intervention, not a fixed standardized baseline plus a raw surplus.
+Likewise $F_4-F_3=u(\mu-F_3)$ both attenuates and adds evidence; it is not
+a pure cold-item bonus. The $F_1-F_0$ and $F_2-F_0$ comparisons isolate
+the two additions, while $F_3$ checks their combination and $F_4$ adds
+posterior calibration. This is a controlled ladder with two individual
+mechanism branches, not a complete factorial study of all interactions.
+
+For a held-out set $H$, Recall@$K$ is
+\begin{equation}
+ \operatorname{Recall@}K(S,H)
+ =\frac{|\operatorname{TopK}(\calI\setminus S)\cap H|}{|H|}.
+\end{equation}
+Split-seed means and sample standard deviations describe split variation.
+A positive mean difference alone does not establish significance or
+causality. Paired per-query or per-split comparisons, exposure strata,
+activation-conditioned metrics, and explicit tie handling strengthen
+interpretation. Current evidence and its provenance remain in
+\code{docs/RESULTS.md}; this theory document adds no new benchmark results.
+
+\section{Computation, memory, and weighted-input caveats}
+\subsection{Operator costs}
+Let $L_B=\operatorname{nnz}(B)$, $L_W=\operatorname{nnz}(W)$, and
+$k=|S|$. Factored incidence for $Q$ dense output columns takes on the
+order of $L_BQ$ sparse--dense work plus bundle/query intermediates and
+an $nQ$ output. It avoids storing an $n^3$ triple tensor even though
+\eqref{eq:triple} characterizes its information. Computing graph diffusion
+in factored form also uses order $L_BQ$ work.
+
+Unweighted concordance can use $WJ$ and $W^{\odot2}J$, with sparse
+products rather than explicit enumeration of seed pairs. In the general
+Rao implementation, each query materializes an $n\times k$ support
+array and multiplies it by a $k\times k$ kernel: the dense quadratic
+work is $O(nk^2)$, with support memory $O(nk)$, plus output storage and
+any dense feature products. A dense feature width $d$ adds $O(ndk)$
+work for candidate--seed dot products. Full-catalogue score banks can
+therefore require several GiB even when a neural encoder has few parameters.
+
+Preprocessing costs also matter: forming $B^\top B$ can generate up to
+order $\sum_b d_b^2$ pair contributions before aggregation. Sparse input
+does not imply that its projection remains sparse. SVD, auxiliary graphs,
+clustering, and model training add costs beyond the scoring formulas.
+No sublinear full-catalogue retrieval guarantee is claimed.
+
+\subsection{Optional weighted constructor}\label{sec:weighted}
+The constructor accepts bundle weights. Let $H$ be binary incidence,
+$t_b\geq0$ the supplied weight, and $\widetilde B=D_tH$ the stored
+nonbinary matrix. Then exposure is $f_i=\sum_b t_bH_{bi}$, bundle sizes
+come from $H$, and a bilinear projection uses
+\begin{equation}
+ \widetilde B^\top D_v\widetilde B
+ =H^\top\diag(t_b^2v_b)H.
+\end{equation}
+Weights are squared because they enter both factors. The surplus also
+contains $t_b^2$, while overlap counts use $H$. It is not a once-weighted
+hyperedge sum unless all weights are one or their interpretation is
+adjusted accordingly.
+
+There is a further binary-specific diagonal correction in
+\code{propagate}. For weighted input the implemented matrix is
+\begin{equation}
+ \widetilde P=D_a\widetilde B^\top D_r\widetilde B D_a
+       -\diag\left(a^2\odot(\widetilde B^\top r)\right),
+\end{equation}
+whose diagonal entry is
+\begin{equation}
+ \widetilde P_{ii}=a_i^2\sum_b r_b(t_b^2-t_b)H_{bi}.
+\end{equation}
+Thus the zero-diagonal and nonnegative-smoother statements for binary
+$B$ do not automatically extend to arbitrary bundle weights. The shipped
+evaluators instantiate the constructor without this optional weighting.
+These caveats specify the existing function rather than silently proving
+a property for a different weighted operator.
+
+\section{Verification map and remaining scientific questions}
+\subsection{What the existing suite checks}
+The mathematical audit checks active-row stochasticity, pure incidence
+activation, separation of a joint bundle from a pairwise triangle, the
+unweighted concordance identity, redundancy examples, numerical posterior
+values, simulated variance-component recovery, equal-frequency
+non-identification, frozen-scale batch invariance, validation pruning,
+and production evaluator compliance with the non-identification policy.
+The standalone suite checks packaging, data utilities, the offline demo,
+and fail-closed evaluation orchestration.
+
+Unit tests instantiate examples and catch implementation regressions;
+they do not prove all quantified statements in this document. In
+particular, the fully degree-matched pairwise separation example in
+\eqref{eq:pasch} is justified by the explicit enumeration above, rather
+than by assuming the simpler triangle test matches every diagonal statistic.
+
+\subsection{What remains empirical or unresolved}
+The following are scientific questions rather than consequences of the
+preceding algebra:
+\begin{enumerate}
+ \item Does training exposure approximate inverse observation variance
+ after normalization and feature fusion? Is $1/f$ better than alternatives?
+ \item Does the metadata-derived $K$ distinguish redundant from
+ complementary constraints in the target application?
+ \item Does incidence help on active queries, especially after matching
+ popularity, query size, and candidate frequency?
+ \item Are posterior gains robust to prior quality, channel reuse,
+ split selection, and variance clipping? How often are raw components
+ negative or numerically unidentified?
+ \item Do gains persist against strong tuned methods under the same
+ candidate catalogue, data access, split, and computational budget?
+ \item Can a meaningful generative target or retrieval guarantee be
+ established beyond a working standardized-score hierarchy?
+\end{enumerate}
+The present algorithm combines distinct mechanisms and exposes testable
+predictions about their behavior. Its mathematical guarantees are those
+proved above, under their stated domains. Novelty of the full method and
+its publication value additionally require related-work comparison and
+empirical evidence; renaming established estimators does not supply that
+evidence.
+
+\appendix
+\section{Reference inference procedure}
+\begin{enumerate}
+ \item Construct train-only incidence, degrees, collaborative graphs,
+ and any allowed auxiliary interaction channels. Prepare the fixed
+ catalogue features under the declared transductive or inductive protocol.
+ \item For validation queries, compute pairwise, incidence, concordance,
+ content, and optional learned scores. Normalize each query column across
+ the fixed catalogue; construct $Y_{\mathrm{val}}$ and $P_{\mathrm{val}}$.
+ \item Fit the validation prior scale, compute residual moments, and
+ return both raw and admissible variance components. If unidentified,
+ restrict the shrinkage grid to zero. Complete any validation selection.
+ \item Freeze all fitted objects and parameters. For each test query,
+ compute its own score column and apply the chosen posterior formula.
+ Do not refit scales or variance components on test-input batches.
+ \item Exclude seeds, apply the declared tie convention and any explicitly
+ enabled post-hoc policy, then select the top $K$ eligible candidates.
+ \item Compute metrics from held-out test targets only after scoring.
+ Record split seeds, data paths/provenance, parameters, and policy settings.
+\end{enumerate}
+
+\section{Source map and build instructions}
+The authoritative detailed source is \code{docs/THEORY.tex}. A navigation
+page is retained at \code{docs/THEORY.md}; a compiled copy is supplied as
+\code{docs/THEORY.pdf}. From the repository root, build with a standard
+LaTeX installation:
+\begin{verbatim}
+mkdir -p artifacts/theory
+for pass in 1 2 3; do
+  pdflatex -halt-on-error -interaction=nonstopmode \
+    -output-directory=artifacts/theory docs/THEORY.tex || exit 1
+done
+\end{verbatim}
+Repeated passes resolve the table of contents and internal references.
+No BibTeX step or external figure is required. Generated files stay under
+the ignored \code{artifacts/} directory; copy the final PDF to
+\code{docs/THEORY.pdf} when refreshing its checked-in rendering.
+Core implementation locations are:
+\begin{center}
+\begin{tabular}{@{}p{0.39\linewidth}p{0.54\linewidth}@{}}
+\toprule
+File & Role \\
+\midrule
+\code{simba/operators.py} & Shared graph, incidence, concordance, ontology,
+and shrinkage functions \\
+\code{simba/ablation\_study.py} & Controlled retail scoring ladder and
+validation-frozen moment calibration \\
+\code{simba/*\_eval.py} & Dataset-specific feature banks, learned channels,
+validation selection, and retrieval \\
+\code{tests/test\_audit.py} & Mathematical and evaluator-policy examples \\
+\code{tests/test\_standalone.py} & Installation/data/driver checks \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{thebibliography}{9}
+\bibitem{zhou2006}
+D. Zhou, J. Huang, and B. Sch\"olkopf.
+Learning with Hypergraphs: Clustering, Classification, and Embedding.
+\emph{Advances in Neural Information Processing Systems 19}, 2006.
+\href{https://papers.nips.cc/paper_files/paper/2006/hash/dff8e9c2ac33381546d96deea9922999-Abstract.html}
+{NeurIPS proceedings, original paper}.
+
+\bibitem{rao1982}
+C. R. Rao. Diversity and dissimilarity coefficients: a unified approach.
+\emph{Theoretical Population Biology}, 21(1):24--43, 1982.
+\url{https://doi.org/10.1016/0040-5809(82)90004-1}.
+
+\bibitem{rendle2010}
+S. Rendle. Factorization Machines.
+\emph{IEEE International Conference on Data Mining}, 2010.
+\url{https://doi.org/10.1109/ICDM.2010.127}.
+\end{thebibliography}
+\end{document}

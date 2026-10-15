@@ -108,8 +108,9 @@ unweighted concordance:
 Two exact properties of~\eqref{eq:r0} should be noted:
 \begin{enumerate}\itemsep1pt
   \item \textbf{Joint degree-1 homogeneity in $(w,\tau)$:} $R_0(\lambda w;\lambda\tau) = \lambda R_0(w;\tau)$ for
-  all $\lambda > 0$ (and asymptotic degree-1 homogeneity $R_0(\lambda w;\tau) \sim \lambda R_0(w;\tau)$ for
-  $A_c \gg \tau$), preventing the $O(A_c^2)$ quadratic explosion of unnormalised bilinear sums such as
+  all $\lambda > 0$. For fixed $\tau$, $R_0(w;\tau)\approx 2e_2(w)/A_c$ when $A_c\gg\tau$;
+  approximate degree-1 scaling requires both $A_c\gg\tau$ and $\lambda A_c\gg\tau$.
+  This normalization controls the $O(A_c^2)$ growth of unnormalised bilinear sums such as
   Factorization Machines (Rendle, 2010).
   \item \textbf{Pairwise seed agreement vs.\ strict $m$-way conjunction:} Because~\eqref{eq:r0} retains the
   second-order symmetric polynomial $e_2$ rather than the full product $e_{|S|}=\prod_{s\in S} w_{c,s}$, it

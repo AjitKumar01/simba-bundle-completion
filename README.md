@@ -30,7 +30,8 @@ The example is a functionality check, not a benchmark-performance claim.
 
 ## Theory and implementation
 
-* [Theory, derivations, assumptions and limits](docs/THEORY.md)
+* [Detailed LaTeX theory: derivations, proofs, assumptions and limits](docs/THEORY.tex)
+  ([compiled PDF](docs/THEORY.pdf); [contents and build instructions](docs/THEORY.md))
 * [Architecture and code map](docs/ARCHITECTURE.md)
 * [Paper-style methodology](paper/method.tex), with [standalone LaTeX wrapper](paper/main.tex)
 * [Evaluation protocol and reproduction commands](docs/REPRODUCIBILITY.md)
