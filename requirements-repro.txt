@@ -1,0 +1,7 @@
+# Versions used by the local verification environment (Python 3.12, macOS ARM64).
+# The version ranges in pyproject.toml support other platforms; CUDA installs
+# should select the appropriate official PyTorch build.
+numpy==2.5.3
+scipy==1.18.1
+scikit-learn==1.9.1
+torch==2.14.1

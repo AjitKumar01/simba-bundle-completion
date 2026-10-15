@@ -1,0 +1,13 @@
+\begin{tikzpicture}[node distance=8mm, every node/.style={draw,rounded corners,align=center,font=\small}, >={Stealth}]
+\node (base) {Pairwise backbone};
+\node[right=of base] (inc) {Joint incidence};
+\node[right=of inc] (rao) {Rao concordance};
+\node[below=of inc] (score) {Compatibility score $Y$};
+\node[left=of score] (prior) {Metadata prior $\mu_0$};
+\node[below=of score] (post) {Frozen calibration and posterior};
+\draw[->] (base)--(score);
+\draw[->] (inc)--(score);
+\draw[->] (rao)--(score);
+\draw[->] (score)--(post);
+\draw[->] (prior)--(post);
+\end{tikzpicture}

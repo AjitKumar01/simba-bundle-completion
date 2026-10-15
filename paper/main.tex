@@ -1,0 +1,32 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,graphicx,hyperref,tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\title{SIMBA: Methodology and Mathematical Scope}
+\author{Ajit Kumar}
+\date{Research implementation; October 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+SIMBA separates joint bundle incidence, redundancy-aware seed concordance and
+exposure-modulated Gaussian shrinkage. This document specifies the implemented
+method and its assumptions. It accompanies the software and is not a claim of
+a peer-reviewed publication.
+\end{abstract}
+\input{method}
+\section{Evaluation evidence and scope}\label{sec:results}
+Five-split, validation-frozen controlled ablations were independently reproduced
+on Food and Clothing: pairwise Recall@20 was 56.19\% and 55.30\%, respectively;
+with posterior calibration it was 59.34\% and 59.02\%. The repository's
+\texttt{docs/RESULTS.md} distinguishes reproduced evidence from author-reported
+and historical results. Overlapping random splits do not establish independent
+population-level significance. Incidence activation does not guarantee ranking
+improvement; Gaussian error and inverse-exposure variance remain model assumptions.
+\section*{References}
+Zhou, Huang and Sch\"olkopf (2006), Learning with Hypergraphs.\\
+Rao (1982), Diversity and dissimilarity coefficients: a unified approach.\\
+Rendle (2010), Factorization Machines.\\
+Ma et al. (2024), Leveraging Multimodal Features and Item-level User Feedback
+for Bundle Construction.\\
+Nguyen et al. (2025), RaMen: Multi-Strategy Multi-Modal Learning for Bundle Construction.
+\end{document}

@@ -1,0 +1,22 @@
+{
+  "base_source_commit": "fd79d501306e0615e53f9902dc78fa20f3ecd329",
+  "core_tests": {
+    "count": 7,
+    "status": "passed"
+  },
+  "standalone_tests": {
+    "count": 8,
+    "status": "passed"
+  },
+  "installed_package_demo": "passed from outside the source checkout",
+  "real_data_smoke": {
+    "dataset": "clothing",
+    "split_seeds": [
+      0
+    ],
+    "status": "passed",
+    "saved_per_seed_JSON": true
+  },
+  "full_benchmarks_rerun_for_packaging": false,
+  "third_party_raw_data_committed": false
+}

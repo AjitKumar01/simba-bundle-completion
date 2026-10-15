@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simba-bundle-completion"
+version = "0.1.0"
+description = "Simplicial incidence, redundancy-aware concordance and empirical-Bayes bundle completion"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Ajit Kumar"}]
+dependencies = ["numpy>=1.26,<3", "scipy>=1.11,<2", "scikit-learn>=1.4,<2", "torch>=2.2,<3"]
+
+[project.optional-dependencies]
+data = ["sentence-transformers>=3,<7"]
+
+[project.scripts]
+simba-demo = "simba.demo:main"
+simba-data = "simba.data_tools:main"
+
+[tool.setuptools]
+packages = ["simba"]
+
+[tool.setuptools.package-data]
+simba = ["example_data.json"]
